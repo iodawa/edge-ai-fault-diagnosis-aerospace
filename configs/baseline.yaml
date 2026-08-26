@@ -1,0 +1,15 @@
+# Baseline (workstation, FP32) MA1DCNN training config
+data:
+  raw_path: data/raw/N-CMAPSS_DS03-012.h5
+  processed_dir: data/processed/
+model:
+  name: ma1dcnn
+  attention_heads: 4          # placeholder - confirm against Wang et al. (2020)
+training:
+  epochs: 100
+  batch_size: 64
+  optimizer: adam
+  learning_rate: 1e-3
+  seed: 42
+target:
+  accuracy_baseline: 0.9816

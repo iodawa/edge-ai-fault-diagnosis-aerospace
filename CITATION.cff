@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "If you use this work, please cite it as below."
+title: "Edge-Optimized MA1DCNN for Real-Time Aerospace Fault Diagnosis"
+type: software
+authors:
+  - family-names: "Odawa"
+    given-names: "Isse"
+date-released: 2026-08-26
+abstract: >
+  An edge-optimized, attention-based 1D convolutional neural network
+  (E-O MA1DCNN) for real-time aircraft engine fault classification on
+  resource-constrained edge hardware (NVIDIA Jetson Nano), evaluated on
+  the NASA N-CMAPSS turbofan degradation dataset.

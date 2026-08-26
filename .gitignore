@@ -1,0 +1,40 @@
+# Data (never commit raw/intermediate research data)
+data/raw/*
+data/interim/*
+data/processed/*
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+
+# Model artifacts / large binaries
+*.onnx
+*.engine
+*.trt
+*.pt
+*.h5
+*.ckpt
+models_out/
+
+# Results (keep small sample outputs, ignore bulk logs)
+results/figures/*
+results/tables/*
+!results/figures/.gitkeep
+!results/tables/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+*.egg-info/
+build/
+dist/
+
+# Environment / secrets
+.env
+
+# OS
+.DS_Store
+
+# Jetson benchmarking logs
+*.tegrastats

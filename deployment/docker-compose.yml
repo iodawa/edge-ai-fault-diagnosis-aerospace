@@ -1,0 +1,10 @@
+# Placeholder compose file for the inference server + power logger.
+version: "3.8"
+services:
+  inference:
+    build: .
+    restart: unless-stopped
+    # devices / runtime: nvidia settings go here for Jetson deployment
+  power-logger:
+    build: .
+    command: ["python3", "-m", "edge_fault_dx.deployment.jetson.tegrastats_logger"]

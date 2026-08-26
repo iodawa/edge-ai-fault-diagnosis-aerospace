@@ -1,0 +1,10 @@
+# Optuna hyperparameter search config
+study_name: ma1dcnn_baseline_search
+n_trials: 100
+direction: maximize
+search_space:
+  learning_rate: [1e-5, 1e-2]     # log-uniform
+  dropout: [0.0, 0.5]
+  batch_size: [16, 32, 64, 128]
+  weight_decay: [1e-6, 1e-2]      # log-uniform
+objective_metric: val_macro_precision

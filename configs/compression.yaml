@@ -1,0 +1,14 @@
+# Pruning + quantization config
+pruning:
+  method: structured_channel
+  ratios: [0.25, 0.50, 0.75]
+quantization:
+  precision: int8
+  calibration_set: data/processed/calibration/
+mixed_precision:
+  enabled: true
+targets:
+  accuracy_floor: 0.9325      # within 5% of 0.9816 baseline
+  latency_reduction_pct: 25
+  energy_reduction_pct: 20
+  power_reduction_pct: 3

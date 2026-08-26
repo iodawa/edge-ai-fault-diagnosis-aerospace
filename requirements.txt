@@ -1,0 +1,12 @@
+torch
+numpy
+pandas
+h5py
+scikit-learn
+matplotlib
+optuna
+onnx
+onnxruntime
+tensorboard
+pyyaml
+pytest

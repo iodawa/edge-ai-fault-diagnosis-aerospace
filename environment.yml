@@ -1,0 +1,25 @@
+name: edge-fault-dx
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pytorch
+  - numpy
+  - pandas
+  - h5py
+  - scikit-learn
+  - matplotlib
+  - pip
+  - pip:
+      - optuna
+      - onnx
+      - onnxruntime
+      - tensorboard
+      - jtop
+      - pyyaml
+      - pytest
+# TensorRT + JetPack components are installed on-device (Jetson Nano),
+# not via conda — see deployment/README.md for the JetPack setup steps.

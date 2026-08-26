@@ -1,0 +1,21 @@
+# Committee / Advisor Q&A Log
+
+A running record of questions raised during praxis review and how each was
+addressed. Append new rounds at the top with a date heading.
+
+## Round 1
+
+| Question | Response |
+|---|---|
+| Problem Statement | Stanton et al. (2023) and Liao et al. (2024) document the same complexity burden across current fault-diagnosis models. Both note that overhead lengthens time-to-decision and extends unscheduled ground time, which Gerdes et al. (2016) prices at $78/minute. An edge-optimized MA1DCNN shortens this window directly, cutting billed delay-minutes. |
+| Thesis Statement | Isenkul (2025) benchmarks all three techniques on a Jetson Nano: pruning cuts energy up to 35% at 92% accuracy, quantization adds 18% more savings plus 25% faster inference, and TensorRT optimization yields a 30% energy reduction — the strongest same-hardware evidence available. Mixed-precision training and Optuna tuning run throughout to prevent accuracy loss. |
+| Research Product | Export the trained MA1DCNN to ONNX, compile to a TensorRT engine for the Jetson Nano, and wrap it in a lightweight Python inference script with a fixed I/O contract (sensor streams in; fault-class/RUL/power-draw out), containerized via Docker on JetPack and triggered automatically from the onboard sensor bus. |
+| Contribution | The algorithm-to-hardware gap is the mismatch between an accuracy-only architecture and edge silicon's memory/compute/power ceiling. Optuna closes it algorithmically, searching hyperparameters against a hardware-aware objective. Mixed-precision training closes it on the hardware side, matching precision to what Jetson Nano Tensor Cores execute efficiently. |
+| Validation Approach | Applies a similar approach to Ron et al. (2022): the Jetson Nano's onboard INA3221 power monitor (via tegrastats/jtop) for continuous per-inference logging, cross-validated against an external USB power meter on a subset of runs. |
+| Hypothesis 1 | The workstation baseline (98.16%) separates what compression costs versus algorithm limits, run under unconstrained compute. The 93.25% floor is a deliberate 5% tolerance band. If real-time accuracy falls below it, flag the inference as low-confidence, escalate to human review, and log it for retraining. |
+| Hypothesis 2 | Measure end-to-end wall-clock time from sensor-sample ingestion to fault-class output on the Jetson Nano using GPU-synchronized timers (CUDA events). Report the full latency distribution (p50/p95/p99), not just the mean, compared against the sub-second "immediate alerting" target — tail latency determines worst-case pilot-alert delay. |
+| Hypothesis 3 | Per Ron et al. (2022), energy savings are driven mainly by reduced inference time, not power draw (their compressed model's peak power fell ~3% while inference time fell ~56%; energy = power × time). This praxis expects the same pattern and reports watts and joules-per-inference as separate metrics. |
+| Bibliography Question | Ron et al. (2022) is the closest methodological blueprint available — it measures latency and watt-level energy on the same hardware class (Jetson Nano/RPi4) after pruning + INT8 quantization, directly reusable for this praxis's H2/H3 measurement protocol. |
+| Technical Challenge Question | Three-part plan: (1) apply sensor-realistic noise augmentation (Gaussian/impulse noise, dropout) to N-CMAPSS training data, following Liao et al.'s (2024) -6dB noise-robustness precedent; (2) run a dedicated robustness test reporting macro-precision degradation vs. noise; (3) scope current results as synthetic-benchmark validated pending real-sensor confirmation. |
+| Practicality Validation #1 | A sub-threshold accuracy reading triggers degraded-mode operation, not silent pass-through: alert confidence is down-ranked, the case is deferred to the existing human-reviewed maintenance workflow, and it is logged for retraining. Speed gains only matter if they don't risk an unverified false negative reaching the cockpit. |
+| Practicality Validation #2 | Same measurement approach as the Validation Approach above — the Jetson Nano's onboard INA3221 sensor via tegrastats/jtop provides continuous logging, spot-checked against an external USB power meter. |

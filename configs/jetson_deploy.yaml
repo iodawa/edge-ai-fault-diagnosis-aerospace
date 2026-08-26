@@ -1,0 +1,12 @@
+# Jetson Nano deployment / benchmarking config
+device: jetson_nano
+jetpack_version: "TBD"
+tensorrt:
+  engine_path: models_out/eo_ma1dcnn.engine
+  precision: int8
+benchmark:
+  batch_size: 1
+  warmup_runs: 10
+  timed_trials: 100
+  power_sample_hz: 10
+  external_meter_crosscheck: true
