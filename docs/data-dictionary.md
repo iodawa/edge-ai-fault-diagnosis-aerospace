@@ -1,39 +1,85 @@
 # Data Dictionary
 
-## N-CMAPSS field groups
+## Files in use
 
-### W — Flight-condition descriptors
+This project trains on three N-CMAPSS sub-datasets, each representing a distinct engine fault mode, combined into one training set:
 
-| Field | Description | Unit |
-|---|---|---|
-| Alt | Altitude | ft |
-| Mach | Flight Mach number | — |
-| TRA | Throttle-resolver angle | % |
-| T2 | Fan-inlet temperature | °C |
+| File | Fault mode | Dev units | Dev rows | Test rows | Total rows |
+|---|---|---|---|---|---|
+| N-CMAPSS_DS01-005.h5 | Fault mode 1 (single-component) | 6 | 4,906,636 | 2,735,232 | 7,641,868 |
+| N-CMAPSS_DS03-012.h5 | Fault mode 2 (dual-component) | 9 | 5,571,277 | 4,251,560 | 9,822,837 |
+| N-CMAPSS_DS08a-009.h5 | Fault mode 7 (multi-component) | 9 | 4,885,389 | 3,722,997 | 8,608,386 |
+| **Combined** | | **24** | **15,363,302** | **10,709,789** | **26,073,091** |
 
-### Xs — Sensor measurements
+All three files share an identical HDF5 key structure and column layout, confirmed directly in `notebooks/01_eda.ipynb`.
 
-| Field | Description | Unit |
-|---|---|---|
-| Nf | Fan speed | rpm |
-| Nc | Core speed | rpm |
-| T24 | Station temperature (LPC outlet) | °R |
-| T30 | Station temperature (HPC outlet) | °R |
-| T50 | Station temperature (LPT outlet) | °R |
-| Ps30 | Static pressure (HPC outlet) | psia |
-| P40 | Static pressure | psia |
+## N-CMAPSS field groups (verified against the real files)
 
-### Labels
+### W — Flight-condition descriptors (4 columns)
 
 | Field | Description |
 |---|---|
-| Fault_Label | Fault class: healthy, `fan_fail`, `lpc_fail`, `hpc_fail`, `hpt_fail`, `lpt_fail` |
-| RUL | Remaining Useful Life | cycles |
-| Unit | Engine unit ID (1 of 100) |
-| Cycle | Flight cycle index within the unit's run-to-failure trajectory |
+| alt | Altitude |
+| Mach | Flight Mach number |
+| TRA | Throttle-resolver angle |
+| T2 | Fan-inlet temperature |
 
-Fill in exact units/ranges/dtypes as EDA (`notebooks/01_eda.ipynb`)
-confirms them against the DS03 HDF5 schema.
+### X_s — Physical sensor measurements (14 columns)
+
+| Field | Description |
+|---|---|
+| T24 | LPC outlet temperature |
+| T30 | HPC outlet temperature |
+| T48 | HPT outlet temperature |
+| T50 | LPT outlet temperature |
+| P15 | Bypass-duct pressure |
+| P2 | Fan-inlet pressure |
+| P21 | LPC outlet pressure |
+| P24 | LPC outlet pressure (duct) |
+| Ps30 | HPC outlet static pressure |
+| P40 | Burner exit pressure |
+| P50 | LPT outlet pressure |
+| Nf | Fan speed |
+| Nc | Core speed |
+| Wf | Fuel flow |
+
+Units (°R for temperatures, psia for pressures, rpm for speeds) follow standard N-CMAPSS convention — confirm exact units against NASA's documentation bundled with the original download before final write-up.
+
+### X_v — Virtual/derived sensor measurements (14 columns)
+
+Confirmed present, 14 columns, float64. **Column names not yet decoded.** Run the same decode step already used for `W_var`/`X_s_var`:
+```python
+xv_names = [n.decode() if isinstance(n, bytes) else n for n in f['X_v_var'][:]]
+```
+Update this section once that output is captured.
+
+### T — Engine health parameters (10 columns)
+
+Confirmed present, 10 columns, float64. **Column names not yet decoded** — same treatment needed for `T_var`. Per general N-CMAPSS documentation this group typically holds flow/efficiency degradation modifiers for the five rotating sub-components, but this should be confirmed from `T_var` directly rather than assumed.
+
+### A — Auxiliary / identifying data (4 columns)
+
+| Field | Description |
+|---|---|
+| unit | Engine unit ID — numbering restarts per file, not global (see per-file unit counts above) |
+| cycle | Flight cycle index within that unit's run-to-failure trajectory |
+| Fc | Flight class |
+| hs | Health state: 1 = healthy, 0 = degraded |
+
+### Y — Remaining Useful Life target (1 column)
+
+Single integer column: cycles remaining until failure. No `_var` name list — a single value needs no column labels.
+
+## Derived training label (built in `preprocessing.py` — not native to the files)
+
+None of the three files contains a native multi-class fault label. The training label is derived as:
+
+- `hs == 1` → class 0 (healthy), pooled across all three files
+- `hs == 0` in `N-CMAPSS_DS01-005.h5` → class 1
+- `hs == 0` in `N-CMAPSS_DS03-012.h5` → class 2
+- `hs == 0` in `N-CMAPSS_DS08a-009.h5` → class 3
+
+Pooling healthy samples across files forces the model to learn genuine degradation signatures rather than per-file artifacts — see `deliverables/multiclass_fault_classification_plan.docx` for the full reasoning.
 
 ## Jetson-Bench (self-generated) fields
 
