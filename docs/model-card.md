@@ -27,8 +27,11 @@ Reporting*.
   automatically.
 
 ## Training data
-NASA N-CMAPSS (DS03 subset), ~9.8M records, 100 engine units, 7 failure
-modes. See [`docs/praxis/07-data-sources.md`](praxis/07-data-sources.md)
+NASA N-CMAPSS, three combined sub-datasets (DS01, DS03, DS08a) representing
+three distinct engine fault modes, ~26.1M combined records, 24 engine units
+(dev split). Labels are derived: healthy samples pooled across all three
+files into one class, degraded samples labeled by source file (4 classes
+total). See [`docs/praxis/07-data-sources.md`](praxis/07-data-sources.md)
 and [`docs/data-dictionary.md`](data-dictionary.md).
 
 ## Metrics
@@ -45,6 +48,10 @@ and [`docs/data-dictionary.md`](data-dictionary.md).
 ## Limitations
 - N-CMAPSS is a synthetic simulation; it lacks real in-flight sensor
   noise, creating a synthetic-to-reality gap.
+- The three source files were combined from separate NASA simulation runs;
+  the labeling scheme pools healthy samples across files specifically to
+  avoid the model learning per-simulation-batch artifacts instead of real
+  degradation signatures.
 - Onboard INA3221 power sensing carries bias and ambient-temperature
   sensitivity; results are spot-checked against an external USB power
   meter.
