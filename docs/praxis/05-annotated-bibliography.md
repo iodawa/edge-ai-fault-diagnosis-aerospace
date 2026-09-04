@@ -127,12 +127,17 @@ compression with accuracy preservation.
 **Summary:** A 2025 GWU praxis applying a Multi-Head Attention 1D-CNN
 (MA1DCNN) to multi-label fault classification on the full usable
 N-CMAPSS dataset (9 sub-datasets combined). Uses normalization,
-segmentation, selective oversampling, focal loss, Cosine Annealing Warm
-Restarts, Gaussian noise augmentation, and Optuna hyperparameter tuning,
-with SHAP analysis for interpretability. On 5,335,270 test samples,
-achieves Macro-F1 = 99.46%, Macro-Precision = 99.92%, and accuracy =
-98.16% — slightly below a 1DCNN-BiLSTM-CBAM variant (98.23%) and
-XGBoost (98.25%) benchmarked in the same study.
+segmentation, undersampling of healthy rows for class balance, Cosine
+Annealing Warm Restarts, Gaussian noise augmentation, and Optuna
+hyperparameter tuning, with SHAP analysis for interpretability. (Her
+Abstract describes this step as "selective oversampling" with "focal
+loss" — but her detailed Methodology and best-model hyperparameters,
+Section 4.2.3 and Table 4.4, show undersampling of negative rows per
+label and Focal = FALSE. This entry follows the more detailed,
+internally-cited account.) On 5,335,270 test samples, achieves Macro-F1
+= 99.46%, Macro-Precision = 99.92%, and accuracy = 98.16% — slightly
+below a 1DCNN-BiLSTM-CBAM variant (98.23%) and XGBoost (98.25%)
+benchmarked in the same study.
 **Methodology:** MA1DCNN trained on all 9 usable N-CMAPSS sub-datasets;
 labels constructed as 5 binary per-component fault flags (fan, LPC, HPC,
 HPT, LPT) via a documented fault-code-to-component mapping table
@@ -148,7 +153,7 @@ proposes model compression or physical edge-hardware deployment.
 of this praxis's 98.16% workstation-accuracy baseline. This praxis
 directly adopts Akindoju's data scope (9 usable N-CMAPSS sub-datasets),
 labeling methodology (the 5-flag multi-label per-component scheme
-derived from his fault-code mapping and RUL ≤ 30 threshold), and
+derived from her fault-code mapping and RUL ≤ 30 threshold), and
 reported baseline — see
 `deliverables/relabel_decision_akindoju_alignment.docx` for the full
 decision record. The gap this praxis fills is squarely the
