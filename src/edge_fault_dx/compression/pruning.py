@@ -33,6 +33,7 @@ treating it as byte-identical.
 from __future__ import annotations
 
 import torch
+import torch.nn as nn
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
@@ -204,8 +205,16 @@ def recover_pruned_model(
     CosineAnnealingWarmRestarts(T_0=10, T_mult=2),
     weight_decay = 0.002164379191774169, threshold = 0.4214610774407138
     (Section 9.2) -- pass these via `train_config`.
+
+    NOTE: train_one_epoch()'s and evaluate()'s real signatures (confirmed
+    against train.ipynb) are (model, loader, optimizer, loss_fn, device)
+    and (model, loader, loss_fn, device, threshold) respectively -- both
+    take loss_fn as a required argument. An earlier version of this
+    function omitted it; fixed here to BCEWithLogitsLoss(), matching
+    run_training()'s own loss_fn in train.ipynb Section 9.
     """
     model = model.to(device)
+    loss_fn = nn.BCEWithLogitsLoss()
     optimizer = Adam(
         model.parameters(),
         lr=train_config["learning_rate"],
@@ -219,8 +228,8 @@ def recover_pruned_model(
     history = []
 
     for epoch in range(1, n_epochs + 1):
-        train_loss = train_one_epoch(model, train_loader, optimizer, device=device)
-        val_metrics = evaluate(model, val_loader, device=device, threshold=train_config["threshold"])
+        train_loss = train_one_epoch(model, train_loader, optimizer, loss_fn, device)
+        val_metrics = evaluate(model, val_loader, loss_fn, device, threshold=train_config["threshold"])
         scheduler.step()
         history.append({"epoch": epoch, "train_loss": train_loss, **val_metrics})
 

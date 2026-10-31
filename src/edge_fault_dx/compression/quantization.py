@@ -157,6 +157,13 @@ def quantize_model_qat(
     Real result, all three pruning ratios: cleared the 0.7940 retention
     bar (0.8385 / 0.8306 / 0.8202), recovering 6.2-8.3 points of macro-F1
     over PTQ at every ratio -- see module docstring.
+
+    NOTE: train_one_epoch()'s and evaluate()'s real signatures (confirmed
+    against train.ipynb) are (model, loader, optimizer, loss_fn, device)
+    and (model, loader, loss_fn, device, threshold) respectively -- both
+    take loss_fn as a required argument. An earlier version of this
+    function omitted it; fixed here to BCEWithLogitsLoss(), matching
+    run_training()'s own loss_fn in train.ipynb Section 9.
     """
     wrapped = QuantizedConvTrunk(model)
     wrapped.train()
@@ -167,6 +174,7 @@ def quantize_model_qat(
         for p in getattr(wrapped, name).parameters():
             p.requires_grad_(False)                          # only the trunk is fine-tuned
 
+    loss_fn = nn.BCEWithLogitsLoss()
     optimizer = Adam(
         (p for p in wrapped.parameters() if p.requires_grad),
         lr=train_config["learning_rate"] * QAT_LR_SCALE,
@@ -178,8 +186,8 @@ def quantize_model_qat(
     history = []
 
     for epoch in range(1, n_epochs + 1):                     # up to 8 epochs, patience=3
-        train_one_epoch(wrapped, train_loader, optimizer, device=device)
-        val_metrics = evaluate(wrapped, val_loader, device=device, threshold=train_config["threshold"])
+        train_one_epoch(wrapped, train_loader, optimizer, loss_fn, device)
+        val_metrics = evaluate(wrapped, val_loader, loss_fn, device, threshold=train_config["threshold"])
         history.append({"epoch": epoch, **val_metrics})
 
         if val_metrics["f1_macro"] > best_f1:
@@ -210,15 +218,14 @@ def resweep_threshold(model, val_loader, device, thresholds=None):
 
     pruning_code_explained.docx Section 11.2 describes this as "ported
     from threshold_sweep.py's own sweep() logic, re-pointed at the
-    compressed model's predictions" -- but threshold_sweep.py does not yet
-    exist anywhere under src/edge_fault_dx/ (not in the live repo tree as
-    of this extraction), only inside earlier-phase notebooks, so the import
-    below is a placeholder until that module is itself pulled out of a
-    notebook the same way this file was. Real re-swept thresholds this
-    project found: PTQ landed all three ratios at 0.400; QAT landed 20%
-    and 40% at 0.425, and 60% at 0.400.
+    compressed model's predictions". That module lives at
+    src/edge_fault_dx/training/threshold_sweep.py -- it exists locally but,
+    like this file until now, had not yet been pushed to GitHub as of this
+    extraction; push it alongside pruning.py/quantization.py or this import
+    will fail. Real re-swept thresholds this project found: PTQ landed all
+    three ratios at 0.400; QAT landed 20% and 40% at 0.425, and 60% at 0.400.
     """
-    from ..evaluation.threshold_sweep import sweep   # TODO: threshold_sweep.py not yet in src/
+    from ..training.threshold_sweep import sweep
     return sweep(model, val_loader, device=device, thresholds=thresholds)
 
 
