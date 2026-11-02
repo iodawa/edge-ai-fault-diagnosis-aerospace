@@ -20,6 +20,23 @@ Usage (run from the same directory as train.py, e.g. /content in Colab)
 Prints a table to the console AND writes the same data as a CSV (threshold,
 precision_macro, recall_macro, f1_macro, hamming_loss) -- paste either one
 back to continue the analysis.
+
+IMPORT NOTE (fixed at push time, src/edge_fault_dx/training/threshold_sweep.py):
+this file is both a standalone Colab script (python threshold_sweep.py ...,
+run from /content alongside a flat train.py, per the Usage block above) and,
+now, a real package submodule -- compression/quantization.py's
+resweep_threshold() does `from ..training.threshold_sweep import sweep`, a
+proper package-relative import. Loading this module that way runs its
+top-level code too, so the original `sys.path.insert(0, ".")` /
+`from train import ...` pair (this project's old "every script runs
+standalone" discipline, per models/ma1dcnn.py's own docstring) would look for
+a top-level module literally named `train` on sys.path -- which does not
+exist in a normal package checkout, only by coincidence in a flat Colab
+/content layout. Fixed below by trying the real package import first
+(`from .train import ...`) and falling back to the original standalone-script
+import only if that fails (i.e. when this file is actually run loose, the way
+the Usage block above describes) -- both ways of running this file still
+work, nothing about the sweep logic itself changed.
 """
 from __future__ import annotations
 
@@ -29,8 +46,11 @@ import sys
 
 import torch
 
-sys.path.insert(0, ".")  # so `import train` finds train.py in the current directory
-from train import CONFIGS, DEFAULT_WINDOWED_DIR, build_dataloaders, build_ma1dcnn, compute_metrics  # noqa: E402
+try:
+    from .train import CONFIGS, DEFAULT_WINDOWED_DIR, build_dataloaders, build_ma1dcnn, compute_metrics
+except ImportError:  # running as a standalone script (see Usage above), not imported as part of the package
+    sys.path.insert(0, ".")  # so `import train` finds train.py in the current directory
+    from train import CONFIGS, DEFAULT_WINDOWED_DIR, build_dataloaders, build_ma1dcnn, compute_metrics  # noqa: E402
 
 # trial13's shipped default -- the one this whole analysis is trying to confirm or replace.
 TRIAL13_DEFAULT_THRESHOLD = 0.4214610774407138
