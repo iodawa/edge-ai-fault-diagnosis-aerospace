@@ -28,6 +28,11 @@ one-dimensional slice and is required for the "lossless at ratio=0.0"
 self-check in Section 7.1 to actually pass) were completed to make this a
 runnable module. Check this against the notebook's literal source before
 treating it as byte-identical.
+
+prune_standard_cnn() (below, added for H1/Phase 5) is a second, separate
+entry point for StandardCNN (models/standard_cnn.py) -- the architecture-
+only comparator H1 needs. See its own docstring for provenance and real
+results.
 """
 
 from __future__ import annotations
@@ -38,6 +43,7 @@ from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
 from ..models.ma1dcnn import build_ma1dcnn
+from ..models.standard_cnn import build_standard_cnn
 from ..training.train import evaluate, train_one_epoch
 
 # ---------------------------------------------------------------------------
@@ -204,7 +210,11 @@ def recover_pruned_model(
     recovery run, not retuned: learning_rate = 0.0004689002238683733,
     CosineAnnealingWarmRestarts(T_0=10, T_mult=2),
     weight_decay = 0.002164379191774169, threshold = 0.4214610774407138
-    (Section 9.2) -- pass these via `train_config`.
+    (Section 9.2) -- pass these via `train_config`. Also reused, unchanged,
+    for StandardCNN's own recovery runs (H1/Phase 5): StandardCNN's own
+    confirmed baseline is different (0.831868), but the hyperparameters
+    themselves stay the same TRIAL_13_TRAIN_CONFIG, which is what keeps the
+    "architecture only" comparison fair.
 
     NOTE: train_one_epoch()'s and evaluate()'s real signatures (confirmed
     against train.ipynb) are (model, loader, optimizer, loss_fn, device)
@@ -244,3 +254,70 @@ def recover_pruned_model(
 
     model.load_state_dict(best_state)   # the BEST epoch, not the last
     return model, history
+
+
+# ---------------------------------------------------------------------------
+# H1/Phase 5 -- pruning StandardCNN, the architecture-only comparator
+# (h1_completion_plan.docx Section 5.1; real results in
+# h1_notebook_code_walkthrough.docx Section 6 and praxis_writeup.docx
+# Section 4.5.1)
+# ---------------------------------------------------------------------------
+def prune_standard_cnn(model, model_config, prune_ratio):
+    """Structured channel pruning of conv1/conv2/conv3 by L1-norm,
+    rebuilding conv2's input, conv3's input, and fc's input to match -- the
+    same three dependent-layer rebuilds prune_ma1dcnn() does for MA1DCNN's
+    conv stack, with no CAM/EAM step because StandardCNN has neither module.
+
+    prune_ma1dcnn's real complexity (pruning_code_explained.docx Section 5)
+    is almost entirely about CAM and EAM: conv3's pruned output channels
+    ripple into CAM's two Linear layers on both sides (including the
+    hidden = channel_3 // 4 dependency) and into EAM's score Conv1d on its
+    input side. StandardCNN has neither module, so its cascade is the
+    short, straightforward conv1->conv2->conv3->fc part of prune_ma1dcnn
+    with the CAM/EAM branch deleted -- not a harder problem, an easier one.
+
+    The lossless-at-ratio-0.0 self-check that proves prune_ma1dcnn's
+    weight-copy wiring is correct (pruning_code_explained.docx Section 7.1
+    -- torch.allclose against the unpruned model's own output) was run
+    against this function first, same verification discipline, new target:
+    confirmed PASSED before trusting it on the real checkpoint
+    (h1_notebook_code_walkthrough.docx Section 6.1).
+
+    Real results at 20%/40%/60%, StandardCNN's own confirmed 0.831868
+    baseline, bar 0.781868 (praxis_writeup.docx Section 4.5.1):
+
+        ratio | params | recovered macro-F1
+        20%   | 38,192 | 0.8345 (0.834464)  PASSED
+        40%   | 22,367 | 0.8412 (0.841175)  PASSED
+        60%   | 11,147 | 0.8083 (0.808305)  PASSED
+    """
+    c1, c2, c3 = compute_pruned_channel_counts(
+        model_config["channel_1"], model_config["channel_2"], model_config["channel_3"], prune_ratio,
+    )
+    pruned_config = dict(model_config)
+    pruned_config.update(channel_1=c1, channel_2=c2, channel_3=c3)
+    pruned_model = build_standard_cnn(pruned_config)
+
+    keep1 = _topk_keep_indices(_l1_channel_importance(model.conv1.conv.weight), c1)
+    keep2 = _topk_keep_indices(_l1_channel_importance(model.conv2.conv.weight), c2)
+    keep3 = _topk_keep_indices(_l1_channel_importance(model.conv3.conv.weight), c3)
+
+    with torch.no_grad():
+        pruned_model.conv1.conv.weight.copy_(model.conv1.conv.weight[keep1, :, :])
+        pruned_model.conv1.conv.bias.copy_(model.conv1.conv.bias[keep1])
+
+        pruned_model.conv2.conv.weight.copy_(model.conv2.conv.weight[keep2, :, :][:, keep1, :])
+        pruned_model.conv2.conv.bias.copy_(model.conv2.conv.bias[keep2])
+
+        pruned_model.conv3.conv.weight.copy_(model.conv3.conv.weight[keep3, :, :][:, keep2, :])
+        pruned_model.conv3.conv.bias.copy_(model.conv3.conv.bias[keep3])
+
+        # fc: in_features (columns) -> keep3
+        pruned_model.fc.weight.copy_(model.fc.weight[:, keep3])
+        pruned_model.fc.bias.copy_(model.fc.bias)
+
+        # output_layer: never pruned, copied as-is
+        pruned_model.output_layer.weight.copy_(model.output_layer.weight)
+        pruned_model.output_layer.bias.copy_(model.output_layer.bias)
+
+    return pruned_model

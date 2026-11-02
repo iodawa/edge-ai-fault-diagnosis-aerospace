@@ -45,10 +45,92 @@ below documents the real re-swept threshold values this project found but
 cannot import a sweep() that was never extracted into src/. Check all of
 this against the notebook's literal source before treating it as
 byte-identical.
+
+StandardCNN ADDITIONS (Phase 5, H1): quantize_standard_cnn_ptq() and
+quantize_standard_cnn_qat(), plus the QuantizedStandardCNNTrunk wrapper
+they build on. Extracted verbatim from
+h1_standard_cnn_and_noise_robustness.ipynb Sections 4-4.1 (real results in
+h1_notebook_code_walkthrough.docx Sections 8-9 and praxis_writeup.docx
+Section 4.5.1). The wrapper is simpler than QuantizedConvTrunk because
+StandardCNN has no cam/eam to carry through unquantized -- conv3's
+dequantized output goes straight into global_avg_pool. Only fc/
+output_layer are frozen during the QAT fine-tune (StandardCNN's own
+version of "only the trunk is fine-tuned"), matching the scope boundary
+quantize_model_qat() already uses for MA1DCNN.
+
+THREE REAL BUGS, found only by actually running this (notebook Section
+4.1 -- all three fixes are in quantize_standard_cnn_ptq()/
+quantize_standard_cnn_qat() below, not just documented):
+
+1. QuantizedStandardCNNTrunk reuses conv1/conv2/conv3 by REFERENCE
+   (self.conv1 = model.conv1, not a copy). torch.quantization.convert()
+   therefore mutates those same submodules on the CALLER's own `model`
+   object, not just on the wrapper -- silently replacing the caller's
+   FP32 conv trunk with INT8 modules. If the caller later reused that
+   same `model` for QAT after PTQ missed the retention bar, QAT wrapped
+   an already-quantized trunk with no ordinary trainable parameters left
+   and Adam(...) raised "optimizer got an empty parameter list". Fixed
+   by deep-copying `model` before wrapping, so PTQ and QAT each get
+   their own independent, still-FP32 copy of the recovered checkpoint.
+2. Eager-mode PyTorch quantization (the "fbgemm" backend used here) only
+   has CPU kernels for its quantized ops -- there is no CUDA
+   implementation of quantized::conv1d / quantized::linear. On a CUDA
+   runtime, wrapping a CUDA model crashed with a device-mismatch error
+   the moment calibration batches (plain CPU tensors from the
+   DataLoader) hit it; moving the batches to CUDA instead would not have
+   fixed it, since convert() would then try to build quantized ops on a
+   CUDA module, which fbgemm does not support at all. Fixed by always
+   quantizing on CPU here, regardless of what device the rest of the
+   notebook trains/benchmarks FP32 models on.
+3. torch.quantization.prepare()/prepare_qat() recursively propagate
+   wrapped.qconfig to every child module that does not set its own --
+   including fc/output_layer, even though they are meant to stay
+   unquantized "by reference". Left unset, convert() silently turned
+   them into real quantized nn.Linear, and forward() then fed them an
+   FP32 tensor right after dequant(), crashing with NotImplementedError:
+   Could not run 'quantized::linear' with arguments from the 'CPU'
+   backend. Fixed by explicitly setting qconfig=None on everything after
+   dequant() (global_avg_pool, dropout, fc, fc_activation, output_layer)
+   before calling prepare()/prepare_qat().
+
+Real, measured results (StandardCNN's own retention bar = 0.781868,
+i.e. its own confirmed baseline 0.831868 minus 5 points -- NOT MA1DCNN's
+0.7940 bar; praxis_writeup.docx Section 4.5.1):
+
+    ratio | FP32 recovered | PTQ macro-F1        | QAT macro-F1
+    20%   | 0.834464        | 0.790884 PASSED     | 0.834483 PASSED (forced,
+          |                 | (bar 0.781868)      | Section 6.1 -- see below)
+    40%   | 0.841175        | 0.778157 BELOW BAR  | 0.831526 PASSED
+    60%   | 0.808305        | 0.722852 BELOW BAR  | 0.802401 PASSED
+
+Unlike MA1DCNN, StandardCNN's 20% PTQ checkpoint actually cleared its own
+bar (0.790884 > 0.781868) -- PTQ was not a uniform failure mode across
+architectures, only at 40%/60% here. QAT at 20% was run anyway (notebook
+Section 6.1), not because PTQ needed a fallback at that ratio, but because
+H1's controlled comparison (Section 8.1) needed both architectures on the
+SAME compression method (QAT) at the SAME ratio (20%) to isolate
+"architecture only" as the one varying factor -- comparing MA1DCNN-QAT
+against StandardCNN-PTQ would have confounded architecture with
+compression method, which is exactly what the notebook's Section 8
+confounded-vs-controlled split exists to show.
+
+HONEST GAP, carried over unchanged from the MA1DCNN path above:
+resweep_threshold() was never wired into the compression loop that
+produced any of these StandardCNN checkpoints. Every verdict in both
+tables above used the fixed 0.4215 threshold tuned against MA1DCNN's own
+uncompressed probability calibration -- not a threshold re-swept per
+compressed StandardCNN variant, the way three of MA1DCNN's own checkpoints
+were (PTQ at 0.400 for all ratios; QAT at 0.425 for 20%/40%, 0.400 for
+60%). This was a deliberate scope decision documented in
+h1_completion_plan.docx Section 6 (re-sweeping was left for a later pass,
+not silently skipped), not an oversight discovered after the fact -- but
+it means every StandardCNN number above is, strictly, a lower bound: a
+re-swept threshold could only move these figures up, never down.
 """
 
 from __future__ import annotations
 
+import copy
 from collections import OrderedDict
 
 import torch
@@ -224,6 +306,10 @@ def resweep_threshold(model, val_loader, device, thresholds=None):
     extraction; push it alongside pruning.py/quantization.py or this import
     will fail. Real re-swept thresholds this project found: PTQ landed all
     three ratios at 0.400; QAT landed 20% and 40% at 0.425, and 60% at 0.400.
+
+    NOT YET WIRED IN for StandardCNN (see module docstring's "HONEST GAP"
+    note) -- every StandardCNN quantization verdict in this module still
+    used the fixed 0.4215 threshold, not a StandardCNN-specific re-sweep.
     """
     from ..training.threshold_sweep import sweep
     return sweep(model, val_loader, device=device, thresholds=thresholds)
@@ -250,6 +336,12 @@ def count_params_any(model) -> int:
     quantization changes a weight's dtype, never how many weights the
     model has, and with this function the two counts match exactly
     (pruning_code_explained.docx Section 12.1).
+
+    Reused unchanged for StandardCNN -- it walks named_modules() generically
+    and has no MA1DCNN-specific assumption, so the same function that
+    verified 43,522/25,467/12,486 for MA1DCNN also verified StandardCNN's
+    own quantized checkpoints' parameter counts (38,192 / 22,367 / 11,147,
+    before quantization -- quantization does not change these either).
     """
     total = 0
     for name, m in model.named_modules():
@@ -299,3 +391,170 @@ def repair_missing_module_dicts(model):
             if attr not in m.__dict__:
                 object.__setattr__(m, attr, OrderedDict())
     return model
+
+
+# =============================================================================
+# StandardCNN additions (Phase 5, H1) -- h1_standard_cnn_and_noise_robustness
+# .ipynb Sections 5-6; real results in h1_notebook_code_walkthrough.docx
+# Sections 8-9 and praxis_writeup.docx Section 4.5.1. See module docstring's
+# "StandardCNN ADDITIONS" section for the full real-numbers table and the
+# honest resweep_threshold-not-wired-in caveat that applies to every
+# function below.
+# =============================================================================
+class QuantizedStandardCNNTrunk(nn.Module):
+    """StandardCNN's version of QuantizedConvTrunk. Simpler than the
+    MA1DCNN wrapper above because there is no cam/eam to carry through
+    unquantized -- conv3's dequantized output goes straight into
+    global_avg_pool, matching StandardCNN.forward()'s own structure
+    (models/standard_cnn.py) with conv1/conv2/conv3 now behind a
+    QuantStub/DeQuantStub pair instead of running in plain FP32.
+    fc/fc_activation/output_layer/dropout/global_avg_pool are reused BY
+    REFERENCE, unquantized, from the original recovered StandardCNN --
+    same "only the trunk is quantized" scope boundary as MA1DCNN's own
+    QuantizedConvTrunk.
+    """
+
+    def __init__(self, model):
+        super().__init__()
+        self.quant = torch.quantization.QuantStub()
+        self.conv1, self.conv2, self.conv3 = model.conv1, model.conv2, model.conv3
+        self.dequant = torch.quantization.DeQuantStub()
+        self.global_avg_pool = model.global_avg_pool
+        self.dropout = model.dropout
+        self.fc = model.fc
+        self.fc_activation = model.fc_activation
+        self.output_layer = model.output_layer
+
+    def forward(self, x):
+        x = self.quant(x)
+        x = self.conv3(self.conv2(self.conv1(x)))
+        x = self.dequant(x)                       # INT8 -> FP32 before global_avg_pool
+        return self.output_layer(self.fc_activation(self.fc(self.dropout(
+            self.global_avg_pool(x).view(x.shape[0], -1)))))
+
+
+def quantize_standard_cnn_ptq(model, calib_loader, n_calib_batches: int = 200):
+    """StandardCNN counterpart to quantize_model_ptq() above -- identical
+    procedure, wrapped in QuantizedStandardCNNTrunk instead of
+    QuantizedConvTrunk since StandardCNN has no cam/eam to carry through
+    unquantized.
+
+    Real result, StandardCNN's own 0.781868 retention bar
+    (praxis_writeup.docx Section 4.5.1):
+        20% -> 0.790884  PASSED
+        40% -> 0.778157  BELOW BAR
+        60% -> 0.722852  BELOW BAR
+    Note this differs from MA1DCNN's pattern -- MA1DCNN's PTQ missed its
+    own bar at all three ratios, but StandardCNN's PTQ actually cleared
+    its bar at 20%. See module docstring's "HONEST GAP" note: the fixed
+    0.4215 threshold was used for this verdict, not a re-swept one.
+
+    See module docstring's "THREE REAL BUGS" note for why this deep-copies
+    `model` and forces CPU rather than wrapping it directly on `device`.
+    """
+    wrapped = QuantizedStandardCNNTrunk(copy.deepcopy(model).to("cpu"))
+    wrapped.eval()
+    wrapped.qconfig = torch.quantization.get_default_qconfig("fbgemm")
+    # Bug 3 (module docstring): prepare() would otherwise propagate
+    # wrapped.qconfig to fc/output_layer too, despite the class docstring
+    # saying they're "unquantized, by reference". Opt them out for real.
+    for name in ("global_avg_pool", "dropout", "fc", "fc_activation", "output_layer"):
+        getattr(wrapped, name).qconfig = None
+    torch.quantization.prepare(wrapped, inplace=True)      # inserts observers
+
+    with torch.no_grad():
+        for i, (X, _) in enumerate(calib_loader):
+            if i >= n_calib_batches:
+                break
+            wrapped(X.to("cpu"))                            # observers watch, output discarded
+
+    torch.quantization.convert(wrapped, inplace=True)       # the actual FP32 -> INT8 swap
+    return wrapped
+
+
+def quantize_standard_cnn_qat(
+    model,
+    train_config: dict,
+    train_loader,
+    val_loader,
+    device,
+    n_epochs: int = QAT_N_EPOCHS,
+    patience: int = QAT_PATIENCE,
+):
+    """StandardCNN counterpart to quantize_model_qat() above -- identical
+    prepare_qat()/FakeQuantize/fine-tune/convert procedure. Only fc and
+    output_layer are frozen during the trunk fine-tune (one fewer module
+    than MA1DCNN's version, since StandardCNN has no cam/eam).
+
+    Real result, StandardCNN's own 0.781868 retention bar:
+        40% -> 0.831526  PASSED
+        60% -> 0.802401  PASSED
+        20% -> 0.834483  PASSED (forced run, notebook Section 6.1 -- PTQ
+                                 had already cleared the bar at 20%, but
+                                 H1's controlled comparison, Section 8.1,
+                                 needed a StandardCNN-QAT checkpoint at 20%
+                                 to compare against MA1DCNN-QAT at 20% on
+                                 the SAME compression method, isolating
+                                 architecture as the one varying factor)
+    Params at 20% after pruning (unchanged by quantization, verified via
+    count_params_any()): 38,192.
+
+    Same deepcopy and CPU-forcing fixes as quantize_standard_cnn_ptq()
+    above, same reasons (module docstring's "THREE REAL BUGS" note): this
+    still ends in torch.quantization.convert(), which needs fbgemm's
+    CPU-only quantized ops, so the fine-tune leading up to it has to
+    happen on CPU too. `device` is kept in the signature for call-site
+    compatibility with quantize_model_qat() but intentionally NOT used to
+    place anything here -- QAT always runs on CPU, independent of
+    whatever device the rest of the notebook trains FP32 models on.
+
+    NOTE: the notebook's own version of this fine-tune loop reuses a
+    module-level `loss_fn` global rather than constructing one locally --
+    a notebook-only convenience that does not survive extraction into an
+    importable module. BCEWithLogitsLoss() is instantiated locally here
+    instead, matching quantize_model_qat()'s own existing convention
+    above (and run_training_like()'s loss_fn in the notebook is itself
+    just nn.BCEWithLogitsLoss(), so this changes no behavior).
+    """
+    wrapped = QuantizedStandardCNNTrunk(copy.deepcopy(model).to("cpu"))
+    wrapped.train()
+    wrapped.qconfig = torch.quantization.get_default_qat_qconfig("fbgemm")   # QAT qconfig, not static
+    # Bug 3 (module docstring), same fix as quantize_standard_cnn_ptq() above.
+    for name in ("global_avg_pool", "dropout", "fc", "fc_activation", "output_layer"):
+        getattr(wrapped, name).qconfig = None
+    torch.quantization.prepare_qat(wrapped, inplace=True)   # inserts FakeQuantize, not plain observers
+
+    for name in ("fc", "output_layer"):
+        for p in getattr(wrapped, name).parameters():
+            p.requires_grad_(False)                          # only the trunk is fine-tuned
+
+    loss_fn = nn.BCEWithLogitsLoss()
+    optimizer = Adam(
+        (p for p in wrapped.parameters() if p.requires_grad),
+        lr=train_config["learning_rate"] * QAT_LR_SCALE,
+    )
+
+    best_f1 = -1.0
+    best_state = None
+    epochs_without_improvement = 0
+    history = []
+
+    for epoch in range(1, n_epochs + 1):                     # up to 8 epochs, patience=3
+        # "cpu" here, not `device` -- see the CPU-forcing note above.
+        train_one_epoch(wrapped, train_loader, optimizer, loss_fn, "cpu")
+        val_metrics = evaluate(wrapped, val_loader, loss_fn, "cpu", threshold=train_config["threshold"])
+        history.append({"epoch": epoch, **val_metrics})
+
+        if val_metrics["f1_macro"] > best_f1:
+            best_f1 = val_metrics["f1_macro"]
+            best_state = {k: v.clone() for k, v in wrapped.state_dict().items()}
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+            if epochs_without_improvement >= patience:
+                break
+
+    wrapped.load_state_dict(best_state)
+    wrapped.eval()
+    torch.quantization.convert(wrapped, inplace=True)        # same final step as PTQ
+    return wrapped, history
